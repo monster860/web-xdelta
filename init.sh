@@ -8,7 +8,11 @@ emconfigure ./configure
 emmake make
 cd ..
 
-
+rm -rf xdelta
+git clone https://github.com/jmacd/xdelta.git
+cd xdelta
+git apply ../xdelta.patch
+cd ..
 
 cd xdelta/xdelta3
 
