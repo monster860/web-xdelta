@@ -32,11 +32,15 @@ function initialize_output_file() {
 			//console.log(position);
 			//console.log(buffer.slice(offset, offset+length));
 			if(output_writable) {
-				output_writable.write({
+				/*output_writable.write({
 					type: 'write',
 					data: buffer.slice(offset, offset+length),
 					position
-				})
+				})*/
+				let data = buffer.slice(offset, offset+length);
+				postMessage({
+					write: curr_run_id, data, position
+				}, [data.buffer]);
 			} else if(output_blob) {
 				output_blob = new Blob([
 					output_blob.slice(0, position),
@@ -58,8 +62,7 @@ onmessage = async (msg) => {
 	if(data.args) {
 		try {
 			if(data.fh) {
-				output_blob = undefined;
-				output_writable = await data.fh.createWritable();
+				output_writable = true;
 			} else {
 				output_blob = new Blob([]);
 				output_writable = undefined;
@@ -74,14 +77,7 @@ onmessage = async (msg) => {
 			initialize_output_file();
 			curr_run_id = data.run_id;
 			let result = -1;
-			try {
-				result = callMain(data.args);
-			} finally {
-				if(output_writable) {
-					Module.printErr("Finalizing...");
-					await output_writable.close();
-				}
-			}
+			result = callMain(data.args);
 			postMessage({
 				done: data.run_id,
 				result,
