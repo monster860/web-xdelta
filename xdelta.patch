@@ -1,0 +1,135 @@
+diff --git a/.gitignore b/.gitignore
+index a5b5926..b3b6852 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,5 +1,6 @@
+ *.o
+ *~
++*.wasm
+ .deps
+ .dirstamp
+ INSTALL
+@@ -18,6 +19,7 @@ config.sub
+ config.sub
+ configure
+ depcomp
++install-sh
+ libtool
+ libtool.m4
+ ltmain.sh
+@@ -30,3 +32,4 @@ stamp-h1
+ xdelta3/xdelta3
+ xdelta3decode
+ xdelta3regtest
++
+diff --git a/xdelta3/xdelta3-main.h b/xdelta3/xdelta3-main.h
+index 7f1e589..a9dd102 100644
+--- a/xdelta3/xdelta3-main.h
++++ b/xdelta3/xdelta3-main.h
+@@ -967,6 +967,14 @@ main_file_exists (main_file *xfile)
+  * is signed, < 0 indicate errors, otherwise byte count. */
+ typedef int (xd3_posix_func) (int fd, uint8_t *buf, usize_t size);
+ 
++static int read_wrapped(int fd, uint8_t *buf, usize_t size) {
++  return read(fd, buf, size);
++}
++
++static int write_wrapped(int fd, uint8_t *buf, usize_t size) {
++  return write(fd, buf, size);
++}
++
+ static int
+ xd3_posix_io (int fd, uint8_t *buf, size_t size,
+ 	      xd3_posix_func *func, size_t *nread)
+@@ -1059,7 +1067,7 @@ main_file_read (main_file  *ifile,
+     }
+ 
+ #elif XD3_POSIX
+-  ret = xd3_posix_io (ifile->file, buf, size, (xd3_posix_func*) &read, nread);
++  ret = xd3_posix_io (ifile->file, buf, size, (xd3_posix_func*) &read_wrapped, nread);
+ #elif XD3_WIN32
+   ret = xd3_win32_io (ifile->file, buf, size, 1 /* is_read */, nread);
+ #endif
+@@ -1093,7 +1101,7 @@ main_file_write (main_file *ofile, uint8_t *buf, usize_t size, const char *msg)
+   if (result != size) { ret = get_errno (); }
+ 
+ #elif XD3_POSIX
+-  ret = xd3_posix_io (ofile->file, buf, size, (xd3_posix_func*) &write, NULL);
++  ret = xd3_posix_io (ofile->file, buf, size, (xd3_posix_func*) &write_wrapped, NULL);
+ 
+ #elif XD3_WIN32
+   ret = xd3_win32_io (ofile->file, buf, size, 0, NULL);
+@@ -2114,7 +2122,7 @@ main_pipe_write (int outfd, uint8_t *exist_buf, usize_t remain)
+   int ret;
+ 
+   if ((ret = xd3_posix_io (outfd, exist_buf, remain,
+-			   (xd3_posix_func*) &write, NULL)))
++			   (xd3_posix_func*) &write_wrapped, NULL)))
+     {
+       return ret;
+     }
+diff --git a/xdelta3/xdelta3.c b/xdelta3/xdelta3.c
+index ef518cd..f83a355 100644
+--- a/xdelta3/xdelta3.c
++++ b/xdelta3/xdelta3.c
+@@ -284,13 +284,13 @@
+ #define SECONDARY_DJW 0  /* standardization, off by default until such time. */
+ #endif
+ 
+-#ifndef SECONDARY_LZMA
+-#ifdef HAVE_LZMA_H
++//#ifndef SECONDARY_LZMA
++//#ifdef HAVE_LZMA_H
+ #define SECONDARY_LZMA 1
+-#else
+-#define SECONDARY_LZMA 0
+-#endif
+-#endif
++//#else
++//#define SECONDARY_LZMA 0
++//#endif
++//#endif
+ 
+ #if XD3_ENCODER
+ #define IF_ENCODER(x) x
+@@ -628,18 +628,18 @@ extern const xd3_sec_type djw_sec_type;
+   return XD3_INTERNAL;
+ #endif
+ 
+-#if SECONDARY_LZMA
++//#if SECONDARY_LZMA
+ extern const xd3_sec_type lzma_sec_type;
+ #define IF_LZMA(x) x
+ #define LZMA_CASE(s) \
+   s->sec_type = & lzma_sec_type; \
+   break;
+-#else
+-#define IF_LZMA(x)
+-#define LZMA_CASE(s) \
+-  s->msg = "unavailable secondary compressor: LZMA"; \
+-  return XD3_INTERNAL;
+-#endif
++//#else
++//#define IF_LZMA(x)
++//#define LZMA_CASE(s) \
++//  s->msg = "unavailable secondary compressor: LZMA"; \
++//  return XD3_INTERNAL;
++//#endif
+ 
+ /***********************************************************************/
+ 
+diff --git a/xdelta3/xdelta3.h b/xdelta3/xdelta3.h
+index b9b6fe0..3d37a17 100644
+--- a/xdelta3/xdelta3.h
++++ b/xdelta3/xdelta3.h
+@@ -167,8 +167,8 @@ typedef ULONGLONG      uint64_t;
+ #define _FILE_OFFSET_BITS 64
+ #endif
+ 
+-static_assert(SIZEOF_SIZE_T == sizeof(size_t), "SIZEOF_SIZE_T not correctly set");
+-static_assert(SIZEOF_UNSIGNED_LONG_LONG == sizeof(unsigned long long), "SIZEOF_UNSIGNED_LONG_LONG not correctly set");
++//static_assert(SIZEOF_SIZE_T == sizeof(size_t), "SIZEOF_SIZE_T not correctly set");
++//static_assert(SIZEOF_UNSIGNED_LONG_LONG == sizeof(unsigned long long), "SIZEOF_UNSIGNED_LONG_LONG not correctly set");
+ 
+ /* Set a xoff_t typedef and the "Q" printf insert. */
+ #if defined(_WIN32)

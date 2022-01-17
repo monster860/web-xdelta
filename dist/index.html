@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script>
+let supports_native_fs = ("showSaveFilePicker" in window);
+let worker = new Worker('worker.js');
+let run_id_ctr = 0;
+let runs = new Map();
+let mode = "decompress";
+window.addEventListener("DOMContentLoaded", () => {
+	if(supports_native_fs) document.getElementById("output-blob").style.display = "none";
+	let mode_select = document.getElementById("mode-select")
+	mode_select.oninput = () => {
+		set_mode(mode_select.value);
+	}
+});
+function set_mode(target_mode) {
+	mode = target_mode;
+	document.getElementById("decompress").style.display = mode == "decompress" ? "block" : "none";
+	document.getElementById("compress").style.display = mode == "compress" ? "block" : "none";
+	document.getElementById("add-opts-div").style.display = (mode == "compress" || mode == "decompress") ? "block" : "none";
+}
+worker.onmessage = (msg) => {
+	let data = msg.data;
+	if(data.stderr != undefined) {
+		do_output(data.stderr);
+	}
+	if(data.done != undefined) {
+		runs.get(data.done)(data);
+		runs.delete(data.done);
+	}
+}
+
+function do_output(text) {
+	let log = document.getElementById("log");
+	for(let part of text.split("\n")) {
+		log.appendChild(document.createTextNode(part.replace(/ /g, "\u00a0")));
+		log.appendChild(document.createElement("br"));
+	}
+	log.scrollTo(0, log.scrollHeight);
+}
+
+function do_run(params) {
+	do_output("xdelta3 " + params.args.join(" "));
+	let run_id = run_id_ctr++;
+	worker.postMessage(Object.assign({}, params, {run_id}));
+	return new Promise((resolve, reject) => {
+		runs.set(run_id, (returned) => {
+			if(returned.failed) reject(returned.error);
+			else resolve(returned);
+		});
+	});
+}
+let buzy = false;
+async function run() {
+	if(buzy) {
+		do_output("Can't run - Buzy");
+		return;
+	}
+	buzy = true;
+	try {
+		let has_output = mode == "compress" || mode == "decompress";
+		let output_filename = !supports_native_fs ? document.getElementById("output-filename").value : "out";
+		if(!output_filename && has_output) throw "Need an output filename";
+		let add_opts = document.getElementById("add-opts").value.trim();
+		let add_opts_arr = add_opts ? add_opts.split(" ") : []
+		let files = [];
+		let args = [];
+		if(mode == "decompress") {
+			args = ["-v", ...add_opts_arr, "-d", "-s", "/in/file0", "/in/file1", "/out"]
+			files = await get_blobs("decode_file1", "decode_file2");
+		} else if(mode == "compress") {
+			args = ["-v", ...add_opts_arr, "-e", "-s", "/in/file0", "/in/file1", "/out"]
+			files = await get_blobs("encode_file1", "encode_file2");
+		} else if(mode == "test") {
+			args = ["test"];
+		} else {
+			args = ["-h"];
+		}
+		let result = await do_run({
+			fh: has_output ? await get_save_handle() : undefined,
+			files,
+			args
+		});
+		do_output("The operation outputted with a code of " + result.result);
+		if(!result.result && has_output) {
+			save_blob(result.blob, output_filename);
+		}
+	} catch(e) {
+		do_output(""+e);
+	} finally {
+		buzy = false;
+	}
+}
+
+async function get_save_handle() {
+	if(!supports_native_fs) return;
+	let handle = await window.showSaveFilePicker();
+	return handle
+}
+
+function save_blob(blob, output_filename) {
+	if(!blob || supports_native_fs) return;
+	let a = document.createElement("a");
+	a.download = output_filename;
+	let url = URL.createObjectURL(blob);
+	a.href = url;
+	a.click();
+	URL.revokeObjectURL(url);
+}
+
+function get_blobs(...ids) {
+	return Promise.all(ids.map(async id => {
+		let file = document.getElementById(id);
+		if(file && file.files.length && file.files[0]) return file.files[0];
+		let url = document.getElementById(id + "_url");
+		console.log(url);
+		if(url && url.value) {
+			do_output("Fetching " + url.value);
+			let response = await fetch(url.value)
+			let out = await response.blob();
+			do_output("Fetched " + url.value);
+			return out;
+		}
+		throw "No file or URL specified";
+	}))
+}
+
+</script>
+<style>
+	body {
+		display: flex;
+		justify-content: center;
+	}
+	#content-div {
+		display: inline-block;
+	}
+	#log {
+		border: 1px solid grey;
+		height: 30em;
+		width: min(50em, 80vw);
+		overflow-y: scroll;
+		overflow-wrap: break-word;
+		word-wrap: break-word;
+		font-family: monospace
+	}
+	.section {
+		padding-top: 5px;
+		padding-bottom: 5px;
+	}
+</style>
+</head>
+<body>
+
+<div id="content-div">
+
+	<div class="section">
+		<h3>
+			Mode
+		</h3>
+		<select id='mode-select'>
+			<option value="decompress">Decode</option>
+			<option value="compress">Encode</option>
+			<option value="help">Help</option>
+			<option value="test">Test</option>
+		</select>
+	</div>
+
+	<div id="decompress" class="section">
+		<div>
+			Source file: <input type="file" id="decode_file1"> or URL: <input type="text" id="decode_file1_url">
+		</div>
+		<div>
+			Diff file: <input type="file" id="decode_file2" accept=".vcdiff,.xdelta"> or URL: <input type="text" id="decode_file2_url">
+		</div>
+	</div>
+	<div id="compress" class="section" style="display: none">
+		<div>
+			Source file: <input type="file" id="encode_file1"> or URL: <input type="text" id="encode_file1_url">
+		</div>
+		<div>
+			Target file: <input type="file" id="encode_file2"> or URL: <input type="text" id="encode_file2_url">
+		</div>
+	</div>
+	<div class="section" id="add-opts-div">
+		Additional Options: <input type="text" id="add-opts">
+	</div>
+	<div id="output-blob" class="section">
+		Output filename: <input type="text" id="output-filename">
+	</div>
+
+	<div class="section">
+		<button onclick="run()">Run</button>
+	</div>
+
+	<pre id="log" class="section"></pre>
+	<div>
+		<i>A WASM-compiled version of <a href="https://github.com/jmacd/xdelta">xdelta</a></i>
+	</div>
+</div>
+</body>
+</html>
