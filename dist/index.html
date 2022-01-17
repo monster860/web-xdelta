@@ -6,12 +6,24 @@ let supports_native_fs = ("showSaveFilePicker" in window);
 let worker = new Worker('worker.js');
 let run_id_ctr = 0;
 let runs = new Map();
+let run_files = new Map();
 let mode = "decompress";
 window.addEventListener("DOMContentLoaded", () => {
 	if(supports_native_fs) document.getElementById("output-blob").style.display = "none";
 	let mode_select = document.getElementById("mode-select")
 	mode_select.oninput = () => {
 		set_mode(mode_select.value);
+	}
+	let search = new URLSearchParams(location.search);
+	for(let key of search.keys()) {
+		if(key.endsWith("_url") || key == "add-opts" || key == "output-filename") {
+			let input = document.getElementById(key);
+			if(input) input.value = search.get(key);
+		}
+	}
+	if(search.has("mode")) {
+		set_mode(search.get("mode"));
+		mode_select.value = mode;
 	}
 });
 function set_mode(target_mode) {
@@ -29,6 +41,14 @@ worker.onmessage = (msg) => {
 		runs.get(data.done)(data);
 		runs.delete(data.done);
 	}
+	if(data.write != undefined) {
+		let file = run_files.get(data.write);
+		file.write({
+			type: 'write',
+			data: data.data,
+			position: data.position
+		});
+	}
 }
 
 function do_output(text) {
@@ -40,16 +60,32 @@ function do_output(text) {
 	log.scrollTo(0, log.scrollHeight);
 }
 
-function do_run(params) {
+async function do_run(params) {
 	do_output("xdelta3 " + params.args.join(" "));
 	let run_id = run_id_ctr++;
+	let writable;
+	if(params.fh) {
+		writable = await params.fh.createWritable();
+		writable.truncate(0);
+		run_files.set(run_id, writable);
+	}
 	worker.postMessage(Object.assign({}, params, {run_id}));
-	return new Promise((resolve, reject) => {
-		runs.set(run_id, (returned) => {
-			if(returned.failed) reject(returned.error);
-			else resolve(returned);
+	let result;
+	try {
+		result = await new Promise((resolve, reject) => {
+			runs.set(run_id, (returned) => {
+				if(returned.failed) reject(returned.error);
+				else resolve(returned);
+			});
 		});
-	});
+	} finally {
+		if(writable) {
+			run_files.delete(run_id);
+			do_output("Finalizing output file...");
+			await writable.close();
+		}
+	}
+	return result;
 }
 let buzy = false;
 async function run() {
@@ -66,19 +102,33 @@ async function run() {
 		let add_opts_arr = add_opts ? add_opts.split(" ") : []
 		let files = [];
 		let args = [];
+		let fh;
 		if(mode == "decompress") {
 			args = ["-v", ...add_opts_arr, "-d", "-s", "/in/file0", "/in/file1", "/out"]
 			files = await get_blobs("decode_file1", "decode_file2");
+			/** @type{string} */
+			let source_filename = files[0].name;
+			let opts = {};
+			if(source_filename) {
+				let ext_pos = source_filename.lastIndexOf(".");
+				if(ext_pos > 0) {
+					opts.types = [{
+						accept: {'unknown/unknown': [source_filename.substring(ext_pos)]}
+					}];
+				}
+			}
+			fh = await get_save_handle(opts);
 		} else if(mode == "compress") {
 			args = ["-v", ...add_opts_arr, "-e", "-s", "/in/file0", "/in/file1", "/out"]
 			files = await get_blobs("encode_file1", "encode_file2");
+			fh = await get_save_handle({types: [{description: "VCDiff stream", accept: {'unknown/unknown': ['.vcdiff', '.xdelta']}}]});
 		} else if(mode == "test") {
 			args = ["test"];
 		} else {
 			args = ["-h"];
 		}
 		let result = await do_run({
-			fh: has_output ? await get_save_handle() : undefined,
+			fh,
 			files,
 			args
 		});
@@ -93,9 +143,9 @@ async function run() {
 	}
 }
 
-async function get_save_handle() {
+async function get_save_handle(opts) {
 	if(!supports_native_fs) return;
-	let handle = await window.showSaveFilePicker();
+	let handle = await window.showSaveFilePicker(opts);
 	return handle
 }
 
@@ -116,10 +166,15 @@ function get_blobs(...ids) {
 		let url = document.getElementById(id + "_url");
 		console.log(url);
 		if(url && url.value) {
-			do_output("Fetching " + url.value);
-			let response = await fetch(url.value)
+			let url_val = url.value;
+			let slash_pos = url_val.lastIndexOf("/");
+			do_output("Fetching " + url_val);
+			let response = await fetch(url_val)
 			let out = await response.blob();
-			do_output("Fetched " + url.value);
+			if(slash_pos >= 0) {
+				out = new File([out], url_val.substring(slash_pos+1));
+			}
+			do_output("Fetched " + url_val);
 			return out;
 		}
 		throw "No file or URL specified";
